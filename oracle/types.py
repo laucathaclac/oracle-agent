@@ -94,6 +94,9 @@ class Hypothesis:
         ConfidenceLevel.HIGH: 1.00,
         ConfidenceLevel.VERY_HIGH: 1.10,
     }
+    # Symmetric Bayesian-style prior prevents a single evidence item from
+    # producing artificial 0%/100% certainty.
+    _PRIOR_STRENGTH: ClassVar[float] = 0.25
 
     @classmethod
     def _evidence_weight(cls, evidence: Evidence, supporting: bool) -> float:
@@ -103,16 +106,19 @@ class Hypothesis:
         return max(0.0, min(1.0, strength)) * source_weight * confidence_weight
 
     def calculate_confidence(self) -> float:
-        """Calculate confidence from strength, source reliability and observation confidence."""
+        """Calculate confidence from weighted evidence with a neutral prior."""
         if not self.supporting_evidence and not self.contradicting_evidence:
             return 0.5
 
         support = sum(self._evidence_weight(e, True) for e in self.supporting_evidence)
         contradict = sum(self._evidence_weight(e, False) for e in self.contradicting_evidence)
-        total = support + contradict
+        total = support + contradict + (2 * self._PRIOR_STRENGTH)
         if total <= 0:
             return 0.5
-        return max(0.0, min(1.0, support / total))
+        return max(
+            0.0,
+            min(1.0, (support + self._PRIOR_STRENGTH) / total),
+        )
 
 
 @dataclass
