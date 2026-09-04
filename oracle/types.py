@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional, Dict, List
+from typing import Any, Optional, Dict, List, ClassVar
 from enum import Enum
 
 
@@ -65,7 +65,7 @@ class Evidence:
 
 @dataclass
 class Hypothesis:
-    """Competing hypothesis with evidence tracking."""
+    """Competing hypothesis with source-aware evidence weighting."""
     id: str
     statement: str
     created_at: datetime
@@ -75,8 +75,8 @@ class Hypothesis:
     is_primary: bool = False
     rationale: str = ""
 
-    # Reliability priors: objective/direct data gets more weight than inference.
-    _SOURCE_WEIGHTS = {
+    # ClassVar prevents dataclasses from treating these dictionaries as instance fields.
+    _SOURCE_WEIGHTS: ClassVar[Dict[EvidenceSource, float]] = {
         EvidenceSource.BINANCE_API: 1.00,
         EvidenceSource.MARKET_DATA: 0.95,
         EvidenceSource.ON_CHAIN: 0.95,
@@ -87,7 +87,7 @@ class Hypothesis:
         EvidenceSource.HYPOTHESIS: 0.40,
         EvidenceSource.CRITIC: 0.75,
     }
-    _CONFIDENCE_WEIGHTS = {
+    _CONFIDENCE_WEIGHTS: ClassVar[Dict[ConfidenceLevel, float]] = {
         ConfidenceLevel.VERY_LOW: 0.25,
         ConfidenceLevel.LOW: 0.50,
         ConfidenceLevel.MEDIUM: 0.75,
