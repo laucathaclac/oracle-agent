@@ -1,5 +1,3 @@
-"""Core data types for ORACLE agent."""
-
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional, Dict, List
@@ -57,10 +55,10 @@ class Observation:
 class Evidence:
     """Evaluated evidence with supporting/contradicting information."""
     observation: Observation
-    supports_hypotheses: List[str] = field(default_factory=list)  # hypothesis IDs
-    contradicts_hypotheses: List[str] = field(default_factory=list)  # hypothesis IDs
-    supporting_strength: float = 0.5  # 0-1 scale
-    contradicting_strength: float = 0.0  # 0-1 scale
+    supports_hypotheses: List[str] = field(default_factory=list)
+    contradicts_hypotheses: List[str] = field(default_factory=list)
+    supporting_strength: float = 0.5
+    contradicting_strength: float = 0.0
     analysis: str = ""
     created_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -73,23 +71,48 @@ class Hypothesis:
     created_at: datetime
     supporting_evidence: List[Evidence] = field(default_factory=list)
     contradicting_evidence: List[Evidence] = field(default_factory=list)
-    confidence_score: float = 0.5  # 0-1 scale
+    confidence_score: float = 0.5
     is_primary: bool = False
     rationale: str = ""
 
+    # Reliability priors: objective/direct data gets more weight than inference.
+    _SOURCE_WEIGHTS = {
+        EvidenceSource.BINANCE_API: 1.00,
+        EvidenceSource.MARKET_DATA: 0.95,
+        EvidenceSource.ON_CHAIN: 0.95,
+        EvidenceSource.TECHNICAL_ANALYSIS: 0.85,
+        EvidenceSource.NEWS: 0.80,
+        EvidenceSource.SOCIAL_SENTIMENT: 0.60,
+        EvidenceSource.INFERENCE: 0.55,
+        EvidenceSource.HYPOTHESIS: 0.40,
+        EvidenceSource.CRITIC: 0.75,
+    }
+    _CONFIDENCE_WEIGHTS = {
+        ConfidenceLevel.VERY_LOW: 0.25,
+        ConfidenceLevel.LOW: 0.50,
+        ConfidenceLevel.MEDIUM: 0.75,
+        ConfidenceLevel.HIGH: 1.00,
+        ConfidenceLevel.VERY_HIGH: 1.10,
+    }
+
+    @classmethod
+    def _evidence_weight(cls, evidence: Evidence, supporting: bool) -> float:
+        strength = evidence.supporting_strength if supporting else evidence.contradicting_strength
+        source_weight = cls._SOURCE_WEIGHTS.get(evidence.observation.source, 0.70)
+        confidence_weight = cls._CONFIDENCE_WEIGHTS.get(evidence.observation.confidence, 0.75)
+        return max(0.0, min(1.0, strength)) * source_weight * confidence_weight
+
     def calculate_confidence(self) -> float:
-        """Calculate confidence based on evidence balance."""
+        """Calculate confidence from strength, source reliability and observation confidence."""
         if not self.supporting_evidence and not self.contradicting_evidence:
             return 0.5
-        
-        support_score = sum(e.supporting_strength for e in self.supporting_evidence)
-        contradict_score = sum(e.contradicting_strength for e in self.contradicting_evidence)
-        
-        total = support_score + contradict_score
-        if total == 0:
+
+        support = sum(self._evidence_weight(e, True) for e in self.supporting_evidence)
+        contradict = sum(self._evidence_weight(e, False) for e in self.contradicting_evidence)
+        total = support + contradict
+        if total <= 0:
             return 0.5
-        
-        return support_score / total
+        return max(0.0, min(1.0, support / total))
 
 
 @dataclass
