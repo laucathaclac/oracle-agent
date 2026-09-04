@@ -1,8 +1,4 @@
-"""ORACLE autonomous investigation engine.
-
-Coordinates planning, tool execution, evidence updates, adversarial critique,
-persistence checkpoints, and confidence-rated verdict generation.
-"""
+"""ORACLE autonomous investigation engine."""
 
 import uuid
 from datetime import datetime
@@ -97,11 +93,9 @@ class OracleInvestigation:
 
         while self.steps_taken < self.max_steps:
             self.state = InvestigationState.PLANNING
-            plan_decision = self._plan_next_action()
-            self.plan_history.append(plan_decision)
+            self.plan_history.append(self._plan_next_action())
             if self._should_terminate():
                 break
-
             self.state = InvestigationState.EXECUTING
             self._execute_planned_tools()
             self.state = InvestigationState.ANALYZING
@@ -109,7 +103,6 @@ class OracleInvestigation:
             self._apply_critic()
             self.steps_taken += 1
             self._checkpoint()
-
             if self._should_terminate():
                 break
             self.planner.replan(self.evidence_store, list(self.hypotheses.values()))
@@ -134,11 +127,9 @@ class OracleInvestigation:
         tools = self.planner.decide_next_tools(
             self.evidence_store, list(self.hypotheses.values()), max_tools=3
         ) if self.planner else []
-        return {
-            "step": self.steps_taken, "action": action, "tools": tools,
-            "timestamp": datetime.utcnow(),
-            "rationale": f"Primary hypothesis confidence: {primary.confidence_score:.2f}",
-        }
+        return {"step": self.steps_taken, "action": action, "tools": tools,
+                "timestamp": datetime.utcnow(),
+                "rationale": f"Leading hypothesis confidence: {primary.confidence_score:.2f}"}
 
     def _execute_planned_tools(self) -> None:
         tool_names = self.plan_history[-1].get("tools", []) if self.plan_history else []
@@ -162,29 +153,25 @@ class OracleInvestigation:
             params = tool.get_parameters() or {}
         except Exception:
             params = {}
-        kwargs = {}
-        for name in params:
-            if name in {"query", "question", "topic", "symbol", "asset"}:
-                kwargs[name] = self.question
-        return kwargs
+        return {name: self.question for name in params
+                if name in {"query", "question", "topic", "symbol", "asset"}}
 
     @staticmethod
     def _source_for_tool(tool_name: str) -> EvidenceSource:
-        return {
-            "fetch_market_data": EvidenceSource.MARKET_DATA,
-            "analyze_technical": EvidenceSource.TECHNICAL_ANALYSIS,
-            "fetch_on_chain_metrics": EvidenceSource.ON_CHAIN,
-            "fetch_social_sentiment": EvidenceSource.SOCIAL_SENTIMENT,
-        }.get(tool_name, EvidenceSource.INFERENCE)
+        return {"fetch_market_data": EvidenceSource.MARKET_DATA,
+                "analyze_technical": EvidenceSource.TECHNICAL_ANALYSIS,
+                "fetch_on_chain_metrics": EvidenceSource.ON_CHAIN,
+                "fetch_social_sentiment": EvidenceSource.SOCIAL_SENTIMENT}.get(
+                    tool_name, EvidenceSource.INFERENCE)
 
     def _evaluate_tool_observation(self, observation: Observation) -> None:
+        """Attach evidence to the best-matching hypothesis deterministically."""
         hypotheses = list(self.hypotheses.values())
-        if not hypotheses:
-            return
         text = f"{observation.interpretation} {observation.raw_data}".lower()
         scored = []
         for hyp in hypotheses:
-            tokens = [t.strip(".,:;!?()[]{}\"") for t in hyp.statement.lower().split() if len(t.strip(".,:;!?()[]{}\"")) > 3]
+            tokens = [t.strip(".,:;!?()[]{}\"") for t in hyp.statement.lower().split()
+                      if len(t.strip(".,:;!?()[]{}\"")) > 3]
             overlap = sum(1 for token in tokens if token and token in text)
             scored.append((overlap, hyp))
         scored.sort(key=lambda item: item[0], reverse=True)
@@ -196,8 +183,7 @@ class OracleInvestigation:
         primary = self._get_primary_hypothesis()
         if primary.confidence_score > 0.85 and len(primary.supporting_evidence) >= 3 and not primary.contradicting_evidence:
             return True
-        total = self.evidence_store.summary()["total_evidence"]
-        return total >= 6 and primary.confidence_score > 0.65
+        return self.evidence_store.summary()["total_evidence"] >= 6 and primary.confidence_score > 0.65
 
     def _update_hypothesis_states(self) -> None:
         for hyp_id, hyp in self.hypotheses.items():
@@ -212,9 +198,12 @@ class OracleInvestigation:
             self.critique_history.extend(self.critic.challenge_hypothesis(primary))
 
     def _get_primary_hypothesis(self) -> Hypothesis:
-        if self.primary_hypothesis_id in self.hypotheses:
-            return self.hypotheses[self.primary_hypothesis_id]
-        return max(self.hypotheses.values(), key=lambda h: h.confidence_score)
+        """Return the strongest hypothesis, keeping the initial leader as the tie-breaker."""
+        if not self.hypotheses:
+            raise ValueError("No hypotheses initialized")
+        initial = self.hypotheses.get(self.primary_hypothesis_id)
+        return max(self.hypotheses.values(),
+                   key=lambda h: (h.confidence_score, h is initial))
 
     def rank_hypotheses(self) -> List[Hypothesis]:
         return sorted(self.hypotheses.values(), key=lambda h: h.confidence_score, reverse=True)
@@ -253,13 +242,11 @@ class OracleInvestigation:
 
     def get_state(self) -> Dict:
         primary = self._get_primary_hypothesis()
-        return {
-            "id": self.id, "question": self.question, "state": self.state.value,
-            "steps_taken": self.steps_taken,
-            "primary_hypothesis": primary.statement if primary else None,
-            "confidence": primary.confidence_score if primary else None,
-            "evidence_count": self.evidence_store.summary()["total_evidence"],
-            "hypotheses_count": len(self.hypotheses),
-            "tools_executed": len(self.tool_results),
-            "critiques": len(self.critique_history),
-        }
+        return {"id": self.id, "question": self.question, "state": self.state.value,
+                "steps_taken": self.steps_taken,
+                "primary_hypothesis": primary.statement if primary else None,
+                "confidence": primary.confidence_score if primary else None,
+                "evidence_count": self.evidence_store.summary()["total_evidence"],
+                "hypotheses_count": len(self.hypotheses),
+                "tools_executed": len(self.tool_results),
+                "critiques": len(self.critique_history)}
