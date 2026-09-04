@@ -12,111 +12,89 @@ class PersistenceBackend(ABC):
 
     @abstractmethod
     def save_investigation(self, investigation_id: str, state: Dict[str, Any]) -> bool:
-        """Save investigation state. Returns success flag."""
         pass
 
     @abstractmethod
     def load_investigation(self, investigation_id: str) -> Optional[Dict[str, Any]]:
-        """Load investigation state. Returns None if not found."""
         pass
 
     @abstractmethod
     def delete_investigation(self, investigation_id: str) -> bool:
-        """Delete investigation state. Returns success flag."""
         pass
 
     @abstractmethod
     def list_investigations(self) -> list:
-        """List all saved investigation IDs."""
         pass
 
 
 class InMemoryPersistence(PersistenceBackend):
-    """In-memory persistence for testing."""
+    """In-memory persistence backend for tests and ephemeral agents."""
 
     def __init__(self):
         self.store: Dict[str, Dict[str, Any]] = {}
         self.access_log: list = []
 
     def save_investigation(self, investigation_id: str, state: Dict[str, Any]) -> bool:
-        """Save to memory."""
         try:
+            snapshot = json.loads(json.dumps(state, default=str))
             self.store[investigation_id] = {
-                "state": json.loads(json.dumps(state, default=str)),  # Deep copy with serialization check
+                "state": snapshot,
                 "saved_at": datetime.utcnow().isoformat(),
             }
             self.access_log.append({"action": "save", "id": investigation_id, "timestamp": datetime.utcnow()})
             return True
-        except Exception as e:
-            self.access_log.append({"action": "save_error", "id": investigation_id, "error": str(e)})
+        except Exception as exc:
+            self.access_log.append({"action": "save_error", "id": investigation_id, "error": str(exc)})
             return False
 
     def load_investigation(self, investigation_id: str) -> Optional[Dict[str, Any]]:
-        """Load from memory."""
         self.access_log.append({"action": "load", "id": investigation_id, "timestamp": datetime.utcnow()})
-        if investigation_id in self.store:
-            return self.store[investigation_id]["state"]
-        return None
+        entry = self.store.get(investigation_id)
+        return entry["state"] if entry else None
 
     def delete_investigation(self, investigation_id: str) -> bool:
-        """Delete from memory."""
-        try:
-            if investigation_id in self.store:
-                del self.store[investigation_id]
-            self.access_log.append({"action": "delete", "id": investigation_id, "timestamp": datetime.utcnow()})
-            return True
-        except Exception:
-            return False
+        self.store.pop(investigation_id, None)
+        self.access_log.append({"action": "delete", "id": investigation_id, "timestamp": datetime.utcnow()})
+        return True
 
     def list_investigations(self) -> list:
-        """List all investigation IDs."""
         return list(self.store.keys())
 
-    def clear(self):
-        """Clear all stored investigations."""
+    def clear(self) -> None:
         self.store.clear()
 
 
 class FilePersistence(PersistenceBackend):
-    """File-based persistence using JSON."""
+    """File-based JSON persistence backend."""
 
     def __init__(self, directory: str = ".oracle_state"):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def _get_filepath(self, investigation_id: str) -> Path:
-        """Get filepath for investigation."""
         return self.directory / f"{investigation_id}.json"
 
     def save_investigation(self, investigation_id: str, state: Dict[str, Any]) -> bool:
-        """Save to JSON file."""
         try:
             filepath = self._get_filepath(investigation_id)
-            data = {
-                "id": investigation_id,
-                "state": state,
-                "saved_at": datetime.utcnow().isoformat(),
-            }
-            with open(filepath, "w") as f:
-                json.dump(data, f, default=str, indent=2)
+            payload = {"id": investigation_id, "state": state, "saved_at": datetime.utcnow().isoformat()}
+            with open(filepath, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, default=str, indent=2)
             return True
         except Exception:
             return False
 
     def load_investigation(self, investigation_id: str) -> Optional[Dict[str, Any]]:
-        """Load from JSON file."""
         try:
             filepath = self._get_filepath(investigation_id)
             if not filepath.exists():
                 return None
-            with open(filepath, "r") as f:
-                data = json.load(f)
-            return data.get("state")
+            with open(filepath, "r", encoding="utf-8") as handle:
+                return json.load(handle).get("state")
         except Exception:
             return None
 
     def delete_investigation(self, investigation_id: str) -> bool:
-        """Delete JSON file."""
         try:
             filepath = self._get_filepath(investigation_id)
             if filepath.exists():
@@ -126,21 +104,17 @@ class FilePersistence(PersistenceBackend):
             return False
 
     def list_investigations(self) -> list:
-        """List all investigation IDs from files."""
         try:
-            return [f.stem for f in self.directory.glob("*.json")]
+            return [path.stem for path in self.directory.glob("*.json")]
         except Exception:
             return []
 
 
 class StateSerializer:
-    """Serializes/deserializes ORACLE investigation state."""
+    """Serialize ORACLE state into JSON-compatible dictionaries."""
 
     @staticmethod
     def serialize(investigation: "OracleInvestigation") -> Dict[str, Any]:
-        """Convert investigation to serializable dict."""
-        from oracle.engine import OracleInvestigation
-        
         return {
             "id": investigation.id,
             "question": investigation.question,
@@ -157,10 +131,8 @@ class StateSerializer:
 
     @staticmethod
     def _serialize_hypotheses(hypotheses: Dict) -> Dict:
-        """Serialize hypotheses."""
-        result = {}
-        for hyp_id, hyp in hypotheses.items():
-            result[hyp_id] = {
+        return {
+            hyp_id: {
                 "id": hyp.id,
                 "statement": hyp.statement,
                 "created_at": hyp.created_at.isoformat(),
@@ -170,29 +142,27 @@ class StateSerializer:
                 "supporting_evidence_count": len(hyp.supporting_evidence),
                 "contradicting_evidence_count": len(hyp.contradicting_evidence),
             }
-        return result
+            for hyp_id, hyp in hypotheses.items()
+        }
 
     @staticmethod
     def _serialize_observations(observations: list) -> list:
-        """Serialize observations."""
-        result = []
-        for obs in observations:
-            result.append({
+        return [
+            {
                 "source": obs.source.value,
                 "timestamp": obs.timestamp.isoformat(),
                 "raw_data": obs.raw_data,
                 "interpretation": obs.interpretation,
                 "confidence": obs.confidence.value,
                 "metadata": obs.metadata,
-            })
-        return result
+            }
+            for obs in observations
+        ]
 
     @staticmethod
     def _serialize_evidence(evidence_list: list) -> list:
-        """Serialize evidence."""
-        result = []
-        for evidence in evidence_list:
-            result.append({
+        return [
+            {
                 "observation_source": evidence.observation.source.value,
                 "observation_timestamp": evidence.observation.timestamp.isoformat(),
                 "supports_hypotheses": evidence.supports_hypotheses,
@@ -201,12 +171,12 @@ class StateSerializer:
                 "contradicting_strength": evidence.contradicting_strength,
                 "analysis": evidence.analysis,
                 "created_at": evidence.created_at.isoformat(),
-            })
-        return result
+            }
+            for evidence in evidence_list
+        ]
 
     @staticmethod
     def get_summary(serialized: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract summary from serialized state."""
         return {
             "id": serialized["id"],
             "question": serialized["question"],
