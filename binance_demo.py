@@ -13,18 +13,16 @@ from oracle.engine import OracleInvestigation
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run ORACLE with Binance Agent OS")
     parser.add_argument("--question", default="Is BTC market structure bullish?")
-    parser.add_argument("--symbol", default="BTCUSDT", help="Market symbol used by the adapter defaults")
+    parser.add_argument("--symbol", default="BTCUSDT", help="Market symbol")
     parser.add_argument("--max-steps", type=int, default=3)
     args = parser.parse_args()
 
-    # The current ORACLE Tool contract uses BTCUSDT as the safe default. The
-    # question remains the agent's reasoning target; the adapter maps the
-    # market symbol into compatible MCP schemas.
     client = BinanceAgentOSClient()
-    registry = build_binance_agent_os_registry(client=client)
+    registry = build_binance_agent_os_registry(client=client, symbol=args.symbol)
 
     print("=== ORACLE × BINANCE AGENT OS ===")
     print(f"MCP endpoint: {client.url}")
+    print(f"Symbol: {args.symbol}")
     print(f"Registered read-only tools: {', '.join(registry.tools)}")
     print(f"Question: {args.question}")
 
@@ -34,9 +32,9 @@ def main() -> None:
         tool_registry=registry,
     )
     investigation.initialize_hypotheses([
-        "BTC market structure is bullish",
-        "BTC market structure is bearish",
-        "BTC market structure is neutral",
+        f"{args.symbol} market structure is bullish",
+        f"{args.symbol} market structure is bearish",
+        f"{args.symbol} market structure is neutral",
     ])
     verdict = investigation.run()
 
