@@ -1,14 +1,4 @@
-"""Optional Binance Agent OS / MCP integration for ORACLE.
-
-The default ORACLE demo remains deterministic and keyless. This module adds a
-read-only bridge for Binance's official Agent OS MCP endpoint so the same
-investigation engine can consume live market-data tools when an MCP-compatible
-Python client environment is available.
-
-The adapter intentionally exposes only read-oriented market-data tools by
-default. Trading, transfer, withdrawal, and account mutation tools are never
-registered by the factory.
-"""
+"""Optional Binance Agent OS / MCP integration for ORACLE."""
 
 from __future__ import annotations
 
@@ -28,7 +18,7 @@ _READ_ONLY_BLOCKLIST = (
 )
 
 _DOMAIN_KEYWORDS = {
-    "market_data": ("ticker", "price", "market", "quote", "book", "depth", "trade", "candlestick", "kline", "funding"),
+    "market_data": ("ticker", "price", "market", "quote", "book", "depth", "candlestick", "kline", "funding"),
     "technical_analysis": ("kline", "candle", "technical", "indicator", "trend", "momentum"),
     "on_chain": ("onchain", "on-chain", "block", "network", "chain"),
     "social_sentiment": ("sentiment", "social", "fear", "greed"),
@@ -45,11 +35,7 @@ class RemoteToolSpec:
 
 
 class BinanceAgentOSClient:
-    """Small synchronous facade over the official Python MCP client.
-
-    The ``mcp`` package is an optional dependency so the normal hackathon demo
-    does not need network access or an MCP installation.
-    """
+    """Synchronous facade over the official Python MCP client."""
 
     def __init__(self, url: str = BINANCE_AGENT_OS_MCP_URL):
         self.url = url
@@ -89,7 +75,6 @@ class BinanceAgentOSClient:
                 ]
 
     def list_tools(self) -> List[RemoteToolSpec]:
-        """Discover tools exposed by Binance Agent OS MCP."""
         return self._run(self._list_tools_async())
 
     async def _call_tool_async(self, name: str, arguments: Dict[str, Any]) -> Any:
@@ -107,18 +92,25 @@ class BinanceAgentOSClient:
                 return await session.call_tool(name, arguments=arguments)
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
-        """Call one discovered MCP tool."""
         return self._run(self._call_tool_async(name, arguments))
 
 
 class BinanceAgentOSTool(Tool):
     """Expose one discovered Binance MCP tool through ORACLE's Tool contract."""
 
-    def __init__(self, alias: str, spec: RemoteToolSpec, client: BinanceAgentOSClient, tags: List[str]):
+    def __init__(
+        self,
+        alias: str,
+        spec: RemoteToolSpec,
+        client: BinanceAgentOSClient,
+        tags: List[str],
+        default_symbol: str = "BTCUSDT",
+    ):
         super().__init__(alias, spec.description or spec.name, tags=tags + ["binance", "agent_os", "read_only"])
         self.remote_name = spec.name
         self.input_schema = spec.input_schema
         self.client = client
+        self.default_symbol = default_symbol
 
     def get_parameters(self) -> Dict[str, type]:
         properties = self.input_schema.get("properties", {}) if isinstance(self.input_schema, dict) else {}
@@ -126,7 +118,7 @@ class BinanceAgentOSTool(Tool):
 
     def execute(self, **kwargs) -> ToolResult:
         try:
-            arguments = _build_arguments(self.input_schema, kwargs)
+            arguments = _build_arguments(self.input_schema, kwargs, self.default_symbol)
             result = self.client.call_tool(self.remote_name, arguments)
             data = _normalize_mcp_result(result)
             if isinstance(data, dict):
@@ -152,12 +144,12 @@ def _python_type(schema: Dict[str, Any]) -> type:
     return {"integer": int, "number": float, "boolean": bool, "array": list, "object": dict}.get(kind, str)
 
 
-def _build_arguments(schema: Dict[str, Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+def _build_arguments(schema: Dict[str, Any], kwargs: Dict[str, Any], default_symbol: str = "BTCUSDT") -> Dict[str, Any]:
     """Build conservative arguments for common Binance market-data schemas."""
     properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
     required = schema.get("required", []) if isinstance(schema, dict) else []
     output: Dict[str, Any] = {}
-    symbol = kwargs.get("symbol") or kwargs.get("asset") or "BTCUSDT"
+    symbol = kwargs.get("symbol") or kwargs.get("asset") or default_symbol
 
     for name, definition in properties.items():
         if name in kwargs and kwargs[name] is not None:
@@ -177,7 +169,6 @@ def _build_arguments(schema: Dict[str, Any], kwargs: Dict[str, Any]) -> Dict[str
 
 
 def _normalize_mcp_result(result: Any) -> Any:
-    """Convert MCP structured/text content into JSON-friendly evidence."""
     if getattr(result, "isError", False):
         raise RuntimeError(_extract_text(result) or "Binance MCP tool returned an error")
     structured = getattr(result, "structuredContent", None)
@@ -189,7 +180,7 @@ def _normalize_mcp_result(result: Any) -> Any:
             return json.loads(text)
         except (TypeError, json.JSONDecodeError):
             return text
-    return str(result)
+    return result
 
 
 def _extract_text(result: Any) -> str:
@@ -222,13 +213,9 @@ def _select_best(specs: Iterable[RemoteToolSpec], domain: str) -> Optional[Remot
 def build_binance_agent_os_registry(
     client: Optional[BinanceAgentOSClient] = None,
     include_optional_domains: bool = False,
+    symbol: str = "BTCUSDT",
 ) -> ToolRegistry:
-    """Discover Binance MCP tools and expose ORACLE's standard evidence domains.
-
-    The factory always registers market data when a compatible remote tool is
-    available. Technical/on-chain/social domains are registered only when a
-    matching read-only tool is actually discovered.
-    """
+    """Discover Binance MCP tools and expose ORACLE's standard evidence domains."""
     client = client or BinanceAgentOSClient()
     specs = client.list_tools()
     registry = ToolRegistry()
@@ -247,7 +234,7 @@ def build_binance_agent_os_registry(
             "on_chain": "fetch_on_chain_metrics",
             "social_sentiment": "fetch_social_sentiment",
         }[domain]
-        registry.register(BinanceAgentOSTool(alias, spec, client, [domain]))
+        registry.register(BinanceAgentOSTool(alias, spec, client, [domain], default_symbol=symbol))
 
     if not registry.tools:
         raise RuntimeError(
