@@ -19,6 +19,9 @@ dev = [
     "pytest-asyncio>=0.21",
     "pytest-cov>=4.1",
 ]
+binance = [
+    "mcp>=1.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["oracle*"]

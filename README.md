@@ -22,7 +22,7 @@ REPLAN
 VERDICT + WHAT WOULD CHANGE MY MIND
 ```
 
-The core is provider-agnostic: tools implement a small interface, so Binance Agent OS/MCP tools can be plugged into the same executor without changing the investigation engine.
+The investigation engine is provider-agnostic. The repository now includes an optional adapter for Binance's official Agent OS MCP endpoint, while keeping the default demo deterministic and keyless.
 
 ## Why ORACLE is different
 
@@ -31,12 +31,12 @@ Most crypto agents stop at **retrieve → summarize**. ORACLE treats research as
 - **Competing hypotheses** instead of a single narrative.
 - **Evidence ledger** with supporting and contradicting links.
 - **Source-aware confidence**: direct market/on-chain evidence receives more weight than social sentiment or inference.
-- **Dynamic planning**: the next tools depend on evidence gaps and hypothesis confidence.
+- **Dynamic planning**: the next tools depend on evidence gaps and available tool metadata.
 - **Adversarial critic**: the leading hypothesis is challenged before conclusion.
 - **Persistence checkpoints**: investigations can be serialized and resumed by a persistence backend.
 - **Auditable verdicts**: confidence, evidence counts, assumptions, and reversal conditions are returned together.
 
-## Quick start
+## Quick start — deterministic demo
 
 Requires Python 3.10+.
 
@@ -46,40 +46,85 @@ pytest -q
 python demo.py
 ```
 
-The demo uses deterministic synthetic data. **No API keys or trading funds are required.**
+The demo uses deterministic synthetic data. **No API keys, network access, or trading funds are required.**
 
-Example output:
+## Live Binance Agent OS mode
+
+Binance's official Agent OS MCP endpoint is:
 
 ```text
-=== ORACLE VERDICT ===
-Question:    Is BTC market structure bullish?
-Conclusion:  BTC market structure is bullish
-Confidence:  ...
-Evidence:    +... / -...
-Tools:       ...
-Critiques:   ...
-Checkpoints: [...]
-Reversal:    Multiple independent sources contradicting the primary hypothesis...
+https://agent.binance.com/mcp/agentic
 ```
 
-## Architecture
+The official Binance documentation says the MCP server can expose market data such as tickers, order books, candlesticks, and funding rates without authentication, while account/trading capabilities are permissioned.
+
+Install the optional MCP client:
+
+```bash
+python -m pip install -e '.[binance]'
+```
+
+Then run:
+
+```bash
+python binance_demo.py
+```
+
+The live entrypoint:
+
+1. Connects to the official Binance Agent OS MCP endpoint.
+2. Discovers the tools exposed by the server.
+3. Selects compatible **read-only** market-data tools by name/description.
+4. Maps them into ORACLE's existing `Tool` interface.
+5. Runs the normal ORACLE investigation loop.
+6. Returns a confidence-rated verdict and reversal condition.
+
+No Binance API key is stored in this repository. If Binance's authorization flow is required for a capability, complete it in the supported MCP client environment and grant only the minimum permissions needed.
+
+### Architecture
+
+```text
+                         Binance Agent OS
+                                │
+                         Official MCP Server
+                                │
+                    live read-only market tools
+                                │
+                                ▼
+QUESTION → HYPOTHESES → PLAN → EXECUTE
+                                │
+                                ▼
+                       EVIDENCE + WEIGHTS
+                                │
+                                ▼
+                         ADVERSARIAL CRITIC
+                                │
+                         REPLAN if needed
+                                │
+                                ▼
+                    VERDICT + CONFIDENCE
+```
+
+### Code path
 
 | Component | Responsibility |
 |---|---|
 | `oracle/engine.py` | Autonomous investigation loop |
 | `oracle/planner.py` | Evidence-gap-driven tool selection |
 | `oracle/executor.py` | Tool registry, execution, errors, history |
+| `oracle/binance_agent_os.py` | Optional Binance Agent OS MCP bridge |
 | `oracle/evidence_store.py` | Evidence indexing and retrieval |
 | `oracle/types.py` | Typed observations, evidence, hypotheses, verdicts |
 | `oracle/critic.py` | Adversarial challenge checks |
 | `oracle/persistence.py` | In-memory/file state persistence |
 | `oracle/demo_tools.py` | Safe deterministic demo tools |
-| `demo.py` | End-to-end showcase |
-| `tests/` | Regression and subsystem tests |
+| `demo.py` | Keyless deterministic showcase |
+| `binance_demo.py` | Live Binance Agent OS showcase |
+| `tests/` | Regression and integration-contract tests |
 
 ## Tool contract
 
-A live Agent OS/MCP integration only needs to satisfy the existing `Tool` contract:
+All integrations use the same small interface:
 
 ```python
 class Tool(ABC):
@@ -87,22 +132,20 @@ class Tool(ABC):
     def get_parameters(self) -> Dict[str, type]: ...
 ```
 
-Successful `ToolResult` objects become `Observation` objects automatically. ORACLE then evaluates them against the competing hypotheses.
+The Binance adapter discovers MCP tools and wraps them as ORACLE `Tool` instances. The planner consumes their tags, so the investigation engine does not need to know Binance-specific tool names.
 
-This separation keeps credentials, permissions, and transport outside the research engine.
+## Safety boundary
 
-## Binance Agent OS
+The live adapter is intentionally **read-only**:
 
-Binance Agent OS provides agent access to supported Binance capabilities through user-controlled permissions. The official Binance MCP server currently exposes market-data and trading capabilities; other Agent OS capabilities can be connected through additional Binance APIs, tools, and skills.
+- Trading tools are not registered.
+- Order/cancel/buy/sell tools are blocked.
+- Transfer/withdrawal/account mutation tools are blocked.
+- The default hackathon demo remains deterministic and cannot place orders.
 
-For a live integration, connect the chosen MCP-compatible client to Binance's official Agent OS MCP endpoint and map its returned tools to ORACLE's `Tool` interface. Keep the demo path keyless and deterministic for reproducible judging.
+This keeps the Track A Data Analysis demo focused on research rather than execution.
 
-Official references:
-
-- https://www.binance.com/en/blog/ecosystem/5991233187660196794
-- https://www.binance.com/en-NG/support/announcement/detail/07d45cdd3831498f8a4ff339031a8480
-
-**Never commit API keys, session tokens, or private account data.** Use the minimum permissions required by the live client.
+**Never commit API keys, OAuth tokens, session tokens, or private account data.**
 
 ## Confidence model
 
@@ -110,18 +153,23 @@ For each hypothesis, evidence contributes:
 
 ```text
 weighted evidence = strength × source reliability × observation confidence
-confidence = weighted support / (weighted support + weighted contradiction)
+confidence = (weighted support + prior) /
+             (weighted support + weighted contradiction + 2 × prior)
 ```
 
-This is intentionally transparent rather than pretending to be a calibrated probability model. The final verdict reports the score as decision confidence, not a guarantee.
+The neutral prior prevents a single observation from producing artificial 0% or 100% certainty. The score is decision confidence, not a guarantee or trading signal.
 
 ## Testing
 
-GitHub Actions runs the full suite on Python 3.10, 3.11, 3.12 and 3.13. The repository includes tests for initialization, evidence linking, contradictions, dynamic planning, critique, autonomous execution, persistence, serialization, ranking, and confidence weighting.
+GitHub Actions runs the full suite on Python 3.10, 3.11, 3.12 and 3.13. Tests cover initialization, evidence linking, contradictions, dynamic planning, critique, autonomous execution, persistence, serialization, ranking, confidence weighting, and the Binance adapter contract.
+
+```bash
+pytest -q
+```
 
 ## Hackathon demo story
 
-A strong demo should show one question moving through the full loop:
+A strong demo shows one question moving through the full loop:
 
 1. Start with three competing market hypotheses.
 2. Let ORACLE identify missing evidence domains.
@@ -133,3 +181,8 @@ A strong demo should show one question moving through the full loop:
 8. End with a verdict that explicitly states **what evidence would change the conclusion**.
 
 The point is not that ORACLE predicts price perfectly. The point is that it makes an agent's research process **observable, challengeable, and auditable**.
+
+## Official Binance references
+
+- https://www.binance.com/en-NG/support/announcement/detail/07d45cdd3831498f8a4ff339031a8480
+- https://www.binance.com/en/square/post/362885563835358
