@@ -64,26 +64,6 @@ class OracleInvestigation:
         self.observations_made.append(obs)
         return obs
 
-    def link_observation_to_hypothesis(self, observation: Observation, hypothesis_id: str,
-                                       supporting: bool = True, strength: float = 0.5) -> None:
-        if hypothesis_id not in self.hypotheses:
-            raise KeyError(f"Unknown hypothesis: {hypothesis_id}")
-        if not 0 <= strength <= 1:
-            raise ValueError("strength must be between 0 and 1")
-        evidence = self.evidence_store.evaluate_observation(
-            observation,
-            supports=[hypothesis_id] if supporting else [],
-            contradicts=[] if supporting else [hypothesis_id],
-            supporting_strength=strength if supporting else 0.0,
-            contradicting_strength=0.0 if supporting else strength,
-            analysis="",
-        )
-        hyp = self.hypotheses[hypothesis_id]
-        target = hyp.supporting_evidence if supporting else hyp.contradicting_evidence
-        if evidence not in target:
-            target.append(evidence)
-        hyp.confidence_score = hyp.calculate_confidence()
-
     def run(self) -> Verdict:
         if not self.hypotheses:
             raise ValueError("No hypotheses initialized. Call initialize_hypotheses() first.")
@@ -105,7 +85,11 @@ class OracleInvestigation:
             self._checkpoint()
             if self._should_terminate():
                 break
-            self.planner.replan(self.evidence_store, list(self.hypotheses.values()))
+            self.planner.replan(
+                self.evidence_store,
+                list(self.hypotheses.values()),
+                available_tools=self.tool_registry.list_tools(),
+            )
 
         self.state = InvestigationState.CONCLUDING
         verdict = self._generate_verdict()
@@ -125,7 +109,10 @@ class OracleInvestigation:
         else:
             action = "validate_hypothesis"
         tools = self.planner.decide_next_tools(
-            self.evidence_store, list(self.hypotheses.values()), max_tools=3
+            self.evidence_store,
+            list(self.hypotheses.values()),
+            max_tools=3,
+            available_tools=self.tool_registry.list_tools(),
         ) if self.planner else []
         return {"step": self.steps_taken, "action": action, "tools": tools,
                 "timestamp": datetime.utcnow(),
@@ -153,8 +140,20 @@ class OracleInvestigation:
             params = tool.get_parameters() or {}
         except Exception:
             params = {}
-        return {name: self.question for name in params
-                if name in {"query", "question", "topic", "symbol", "asset"}}
+        # Keep generic tools compatible while allowing the Binance adapter to
+        # inspect its full MCP schema and fill safe market-data defaults.
+        kwargs: Dict[str, Any] = {}
+        if "query" in params:
+            kwargs["query"] = self.question
+        if "question" in params:
+            kwargs["question"] = self.question
+        if "topic" in params:
+            kwargs["topic"] = self.question
+        if "symbol" in params:
+            kwargs["symbol"] = "BTCUSDT"
+        if "asset" in params:
+            kwargs["asset"] = "BTCUSDT"
+        return kwargs
 
     @staticmethod
     def _source_for_tool(tool_name: str) -> EvidenceSource:
@@ -202,8 +201,7 @@ class OracleInvestigation:
         if not self.hypotheses:
             raise ValueError("No hypotheses initialized")
         initial = self.hypotheses.get(self.primary_hypothesis_id)
-        return max(self.hypotheses.values(),
-                   key=lambda h: (h.confidence_score, h is initial))
+        return max(self.hypotheses.values(), key=lambda h: (h.confidence_score, h is initial))
 
     def rank_hypotheses(self) -> List[Hypothesis]:
         return sorted(self.hypotheses.values(), key=lambda h: h.confidence_score, reverse=True)
