@@ -56,7 +56,7 @@ Binance's official Agent OS MCP endpoint is:
 https://agent.binance.com/mcp/agentic
 ```
 
-The official Binance documentation says the MCP server can expose market data such as tickers, order books, candlesticks, and funding rates without authentication, while account/trading capabilities are permissioned. ORACLE deliberately uses only read-only market-data tools in this adapter. citehttps://www.binance.com/en-NG/support/announcement/detail/07d45cdd3831498f8a4ff339031a8480
+The official Binance documentation says the MCP server can expose market data such as tickers, order books, candlesticks, and funding rates without authentication, while account/trading capabilities are permissioned.
 
 Install the optional MCP client:
 
